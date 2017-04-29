@@ -1,6 +1,7 @@
 #include <vector>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include "tgaimage.h"
 #include "model.h"
 #include "geometry.h"
@@ -40,46 +41,70 @@ void line(Vec2i t0, Vec2i t1, TGAImage &image, TGAColor color) {
     }
 }
 
-void triangle(Vec2i t0, Vec2i t1, Vec2i t2, TGAImage &image, TGAColor color)
+Vec3f barycentric(Vec3f A, Vec3f B, Vec3f C, Vec3f P) {
+    Vec3f s[2];
+    for (int i=2; i--; ) {
+        s[i][0] = C[i]-A[i];
+        s[i][1] = B[i]-A[i];
+        s[i][2] = A[i]-P[i];
+    }
+    Vec3f u = cross(s[0], s[1]);
+    if (std::abs(u[2])>1e-2) // dont forget that u[2] is integer. If it is zero then triangle ABC is degenerate
+        return Vec3f(1.f-(u.x+u.y)/u.z, u.y/u.z, u.x/u.z);
+    return Vec3f(-1,1,1); // in this case generate negative coordinates, it will be thrown away by the rasterizator
+}
+
+void triangle(Vec3f *pts, Vec2i *uv, TGAImage &image, float intensity, float *zbuffer)
 {
-    if (t0.y == t1.y && t1.y == t2.y){
-        line(t0,t1,image,color);
-        line(t0,t2,image,color);
-    } else {
-        if (t0.y>t1.y) std::swap(t0, t1);
-        if (t0.y>t2.y) std::swap(t0, t2);
-        if (t1.y>t2.y) std::swap(t1, t2);
-        int y, ymin = (int) t0.y, ymoy = (int) t1.y, ymax = (int) t2.y;
-        int long_height = t2.y - t0.y;
-        int short_height = t1.y - t0.y+1;
-        if (short_height != 0)
-        {
-            for (y = ymin; y <= ymoy; y++)
-            {
-                float long_pourcent = (float)(y-ymin)/long_height;
-                float short_pourcent = (float)(y-ymin)/short_height;
-                Vec2i pos1 = t0 + (t2 - t0)*long_pourcent;
-                pos1.y = y;
-                Vec2i pos2 = t0 + (t1 - t0)*short_pourcent;
-                pos2.y = y;
-                line(pos1,pos2,image,color);
-            }
-        }
-        short_height = t2.y - t1.y+1;
-        if (short_height != 0)
-        {
-            for (y = ymoy; y <= ymax; y++)
-            {
-                float long_pourcent = (float)(y-ymin)/long_height;
-                float short_pourcent = (float)(y-ymoy)/short_height;
-                Vec2i pos1 = t0 + (t2 - t0)*long_pourcent;
-                pos1.y = y;
-                Vec2i pos2 = t1 + (t2 - t1)*short_pourcent;
-                pos2.y = y;
-                line(pos1,pos2,image,color);
-            }
+    Vec2f bboxmin(std::numeric_limits<float>::max(),std::numeric_limits<float>::max());
+    Vec2f bboxmax(-std::numeric_limits<float>::max(),-std::numeric_limits<float>::max());
+    Vec2i bboxmin_uv(std::numeric_limits<int>::max(),std::numeric_limits<int>::max());
+    Vec2i bboxmax_uv(-std::numeric_limits<int>::max(),-std::numeric_limits<int>::max());
+    Vec2f limit(image.get_width()-1,image.get_height()-1);
+    Vec2i limit_uv(image.get_width()-1,image.get_height()-1);
+    for (int i=0; i<3; i++) {
+        for (int j=0; j<2; j++) {
+            bboxmin[j] = std::max(0.f,      std::min(bboxmin[j], pts[i][j]));
+            bboxmax[j] = std::min(limit[j], std::max(bboxmax[j], pts[i][j]));
+            bboxmin_uv[j] = std::max(0,      std::min(bboxmin_uv[j], uv[i][j]));
+            bboxmax_uv[j] = std::min(limit_uv[j], std::max(bboxmax_uv[j], uv[i][j]));
         }
     }
+    Vec3f P;
+    Vec2i uvP;
+    uvP.x = bboxmin_uv.x;
+    uvP.y = bboxmin_uv.y;
+    for (P.x=bboxmin.x; P.x<=bboxmax.x; P.x++) {
+        uvP.y = bboxmin_uv.y;
+        for (P.y=bboxmin.y; P.y<=bboxmax.y; P.y++)
+        {
+            Vec3f barycentre = barycentric(pts[0], pts[1], pts[2], P);
+            if (barycentre.x >= 0 && barycentre.y >= 0  && barycentre.z >= 0)
+            {
+                P.z = 0;
+                for (int i = 0; i <3 ; i++)
+                {
+                    P.z += pts[i].z*barycentre[i];
+                }
+                if (zbuffer[(int)(P.x + P.y*width)] < P.z)
+                {
+
+                    TGAColor color = model->diffuse(uvP);
+                    color.r *= intensity;
+                    color.g *= intensity;
+                    color.b *= intensity;
+                    zbuffer[int(P.x+P.y*width)] = P.z;
+                    image.set(P.x, P.y, color);
+                }
+            }
+            uvP.y++;
+        }
+        uvP.x++;
+    }
+}
+
+Vec3f world2screen(Vec3f v) {
+    return Vec3f(int((v.x+1.)*width/2.+.5), int((v.y+1.)*height/2.+.5), v.z);
 }
 
 int main(int argc, char** argv) {
@@ -89,25 +114,33 @@ int main(int argc, char** argv) {
         model = new Model("obj/african_head.obj");
     }
     Vec3f light_dir(0,0,-1);
-
+    float *zbuffer = new float[width*height];
 
     TGAImage image(width, height, TGAImage::RGB);
+    /*TGAImage texture("obj/african_head_diffuse_tga");
+    texture.read_tga_file();
+    texture.buffer();*/
     for (int i=0; i<model->nfaces(); i++) {
         std::vector<int> face = model->face(i);
-        Vec2i screen_coords[3];
-        Vec3f world_coords[3];
-        for (int j=0; j<3; j++) {
-            Vec3f v = model->vert(face[j]);
-            world_coords[j] = v;
-            screen_coords[j] = Vec2i((v.x+1.)*width/2., (v.y+1.)*height/2.);
+        Vec3f pts[3], txt[3], world_coords[3];
+        for (int i=0; i<3; i++)
+        {
+            Vec3f v = model->vert(face[i]);
+            world_coords[i] = v;
+            pts[i] = world2screen(v);
         }
         Vec3f n = (world_coords[2]-world_coords[0])^(world_coords[1]-world_coords[0]);
         n.normalize();
         float intensity = n*light_dir;
         if (intensity>0) {
-            triangle(screen_coords[0], screen_coords[1], screen_coords[2], image, TGAColor(intensity*255, intensity*255, intensity*255, 255));
+            Vec2i uv[3];
+            for (int k=0; k<3; k++) {
+                uv[k] = model->uv(i, k);
+            }
+            triangle(pts, uv, image, intensity, zbuffer);
         }
     }
+
     image.flip_vertically(); // i want to have the origin at the left bottom corner of the image
     image.write_tga_file("output.tga");
     delete model;
