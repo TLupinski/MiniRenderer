@@ -14,6 +14,9 @@ Model *model = NULL;
 int *zbuffer = NULL;
 Vec3f light_dir(0,0,-1);
 Vec3f camera(0,0,5);
+Vec3f eye(1,1,3);
+Vec3f center(0,0,0);
+Matrix ModelView;
 
 Vec3f matrixToVector(Matrix m)
 {
@@ -106,18 +109,36 @@ Vec3f world2screen(Vec3f v) {
     return Vec3f(int((v.x+1.)*width/2.+.5), int((v.y+1.)*height/2.+.5), v.z);
 }
 
+void lookat(Vec3f eye, Vec3f center, Vec3f up) {
+    Vec3f z = (eye-center).normalize();
+    Vec3f x = cross(up,z).normalize();
+    Vec3f y = cross(z,x).normalize();
+    Matrix Minv = Matrix::identity(4);
+    Matrix Tr   = Matrix::identity(4);
+    for (int i=0; i<3; i++) {
+        Minv[0][i] = x[i];
+        Minv[1][i] = y[i];
+        Minv[2][i] = z[i];
+        Tr[i][3] = -center[i];
+    }
+    ModelView = Minv*Tr;
+}
+
 int main(int argc, char** argv) {
     if (2==argc) {
         model = new Model(argv[1]);
     } else {
         model = new Model("obj/african_head.obj");
     }
-    Vec3f light_dir(0,0,-1);
     float *zbuffer = new float[width*height];
 
     Matrix projection = Matrix::identity(4);
     projection[3][2] = -1.f/camera.z;
     Matrix viewPort = viewport(width/8, height/8, width*3/4, height*3/4);
+    ModelView = Matrix::identity(4);
+
+    Vec3f up(0,10,0);
+    lookat(eye,center,up);
 
     TGAImage image(width, height, TGAImage::RGB);
     for (int i=0; i<model->nfaces(); i++) {
@@ -127,7 +148,7 @@ int main(int argc, char** argv) {
         {
             Vec3f v = model->vert(face[i]);
             world_coords[i] = v;
-            pts[i] = matrixToVector(viewPort*projection*vectorToMatrix(v));
+            pts[i] = matrixToVector(viewPort*projection*ModelView*vectorToMatrix(v));
         }
         Vec3f n = (world_coords[2]-world_coords[0])^(world_coords[1]-world_coords[0]);
         n.normalize();
