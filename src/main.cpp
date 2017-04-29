@@ -6,39 +6,40 @@
 #include "model.h"
 #include "geometry.h"
 
-const TGAColor white = TGAColor(255, 255, 255, 255);
-const TGAColor red   = TGAColor(255, 0,   0,   255);
-const TGAColor green   = TGAColor(0, 255,  0,   255);
-Model *model = NULL;
 const int width  = 800;
 const int height = 800;
+const int depth = 255;
 
-void line(Vec2i t0, Vec2i t1, TGAImage &image, TGAColor color) {
-    bool steep = false;
-    float x0,y0,x1,y1;
-    x0 = t0.x;
-    y0 = t0.y;
-    x1 = t1.x;
-    y1 = t1.y;
-    if (std::abs(x0-x1)<std::abs(y0-y1)) {
-        std::swap(x0, y0);
-        std::swap(x1, y1);
-        steep = true;
-    }
-    if (x0>x1) {
-        std::swap(x0, x1);
-        std::swap(y0, y1);
-    }
+Model *model = NULL;
+int *zbuffer = NULL;
+Vec3f light_dir(0,0,-1);
+Vec3f camera(0,0,5);
 
-    for (int x=x0; x<=x1; x++) {
-        float t = (x-x0)/(float)(x1-x0);
-        int y = y0*(1.-t) + y1*t;
-        if (steep) {
-            image.set(y, x, color);
-        } else {
-            image.set(x, y, color);
-        }
-    }
+Vec3f matrixToVector(Matrix m)
+{
+    return Vec3f(m[0][0]/m[3][0],m[1][0]/m[3][0],m[2][0]/m[3][0]);
+}
+
+Matrix vectorToMatrix(Vec3f v)
+{
+    Matrix m = Matrix::identity(4);
+    m[0][0] = v.x;
+    m[1][0] = v.y;
+    m[2][0] = v.z;
+    m[3][0] = 1.f;
+    return m;
+}
+
+Matrix viewport(int x, int y, int w, int h) {
+    Matrix m = Matrix::identity(4);
+    m[0][3] = x+w/2.f;
+    m[1][3] = y+h/2.f;
+    m[2][3] = depth/2.f;
+
+    m[0][0] = w/2.f;
+    m[1][1] = h/2.f;
+    m[2][2] = depth/2.f;
+    return m;
 }
 
 Vec3f barycentric(Vec3f A, Vec3f B, Vec3f C, Vec3f P) {
@@ -61,22 +62,21 @@ void triangle(Vec3f *pts, Vec2i *uv, TGAImage &image, float intensity, float *zb
     Vec2i bboxmin_uv(std::numeric_limits<int>::max(),std::numeric_limits<int>::max());
     Vec2i bboxmax_uv(-std::numeric_limits<int>::max(),-std::numeric_limits<int>::max());
     Vec2f limit(image.get_width()-1,image.get_height()-1);
-    Vec2i limit_uv(image.get_width()-1,image.get_height()-1);
     for (int i=0; i<3; i++) {
         for (int j=0; j<2; j++) {
             bboxmin[j] = std::max(0.f,      std::min(bboxmin[j], pts[i][j]));
             bboxmax[j] = std::min(limit[j], std::max(bboxmax[j], pts[i][j]));
-            bboxmin_uv[j] = std::max(0,      std::min(bboxmin_uv[j], uv[i][j]));
-            bboxmax_uv[j] = std::min(limit_uv[j], std::max(bboxmax_uv[j], uv[i][j]));
+            bboxmin_uv[j] = std::min(bboxmin_uv[j], uv[i][j]);
+            bboxmax_uv[j] = std::max(bboxmax_uv[j], uv[i][j]);
         }
     }
     Vec3f P;
     Vec2i uvP;
     uvP.x = bboxmin_uv.x;
     uvP.y = bboxmin_uv.y;
-    for (P.x=bboxmin.x; P.x<=bboxmax.x; P.x++) {
+    for (P.x=(int)bboxmin.x; P.x<=bboxmax.x; P.x++) {
         uvP.y = bboxmin_uv.y;
-        for (P.y=bboxmin.y; P.y<=bboxmax.y; P.y++)
+        for (P.y=(int)bboxmin.y; P.y<=bboxmax.y; P.y++)
         {
             Vec3f barycentre = barycentric(pts[0], pts[1], pts[2], P);
             if (barycentre.x >= 0 && barycentre.y >= 0  && barycentre.z >= 0)
@@ -88,7 +88,6 @@ void triangle(Vec3f *pts, Vec2i *uv, TGAImage &image, float intensity, float *zb
                 }
                 if (zbuffer[(int)(P.x + P.y*width)] < P.z)
                 {
-
                     TGAColor color = model->diffuse(uvP);
                     color.r *= intensity;
                     color.g *= intensity;
@@ -116,10 +115,11 @@ int main(int argc, char** argv) {
     Vec3f light_dir(0,0,-1);
     float *zbuffer = new float[width*height];
 
+    Matrix projection = Matrix::identity(4);
+    projection[3][2] = -1.f/camera.z;
+    Matrix viewPort = viewport(width/8, height/8, width*3/4, height*3/4);
+
     TGAImage image(width, height, TGAImage::RGB);
-    /*TGAImage texture("obj/african_head_diffuse_tga");
-    texture.read_tga_file();
-    texture.buffer();*/
     for (int i=0; i<model->nfaces(); i++) {
         std::vector<int> face = model->face(i);
         Vec3f pts[3], txt[3], world_coords[3];
@@ -127,7 +127,7 @@ int main(int argc, char** argv) {
         {
             Vec3f v = model->vert(face[i]);
             world_coords[i] = v;
-            pts[i] = world2screen(v);
+            pts[i] = matrixToVector(viewPort*projection*vectorToMatrix(v));
         }
         Vec3f n = (world_coords[2]-world_coords[0])^(world_coords[1]-world_coords[0]);
         n.normalize();
