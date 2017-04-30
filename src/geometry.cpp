@@ -92,6 +92,38 @@ Matrix Matrix::inverse() {
     return truncate;
 }
 
+Matrix Matrix::invert_transpose()
+{
+    Matrix m = inverse();
+    return m.transpose();
+}
+
+Vec4f matrixToVector(Matrix m)
+{
+    return Vec4f(m[0][0],m[1][0],m[2][0],m[3][0]);
+}
+
+Matrix vectorToMatrix(Vec4f v)
+{
+    Matrix m = Matrix::identity(4);
+    m[0][0] = v.x;
+    m[1][0] = v.y;
+    m[2][0] = v.z;
+    m[3][0] = v.w;
+    return m;
+}
+
+Vec3f projectionVector(Matrix m, Vec3f vect)
+{
+   Vec4f vect4 = Vec4f(vect.x, vect.y, vect.z, 1);
+   Vec3f res = Vec3f() ;
+   for (int i = 0; i < 3; i++)
+   {
+       res[i] = m[i][0]*vect4[0] + m[i][1]*vect4[1] + m[i][2]*vect4[2] + m[i][3]*vect4[3];
+   }
+   return res.normalize();
+}
+
 std::ostream& operator<<(std::ostream& s, Matrix& m) {
     for (int i=0; i<m.nrows(); i++)  {
         for (int j=0; j<m.ncols(); j++) {
