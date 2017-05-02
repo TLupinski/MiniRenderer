@@ -54,7 +54,7 @@ Vec3f barycentric(Vec4f A, Vec4f B, Vec4f C, Vec2i P) {
     return Vec3f(-1,1,1); // in this case generate negative coordinates, it will be thrown away by the rasterizator
 }
 
-void triangle(Vec4f *pts, IShader &shader, TGAImage &image, TGAImage &zbuffer, Model *model)
+void triangle(Vec4f *pts, IShader &shader, TGAImage &image, float *zbuffer, Model *model)
 {
     Vec2f bboxmin(std::numeric_limits<float>::max(),std::numeric_limits<float>::max());
     Vec2f bboxmax(-std::numeric_limits<float>::max(),-std::numeric_limits<float>::max());
@@ -73,12 +73,11 @@ void triangle(Vec4f *pts, IShader &shader, TGAImage &image, TGAImage &zbuffer, M
             float z = pts[0][2]*c.x + pts[1][2]*c.y + pts[2][2]*c.z;
             float w = pts[0][3]*c.x + pts[1][3]*c.y + pts[2][3]*c.z;
             int frag_depth = std::max(0, std::min(255, int(z/w+.5)));
-            if (c.x<0 || c.y<0 || c.z<0 || zbuffer.get(P.x, P.y).bgra[0] > frag_depth) continue;
+            if (c.x<0 || c.y<0 || c.z<0 || zbuffer[P.x+ P.y*width] > frag_depth) continue;
             bool discard = shader.fragment(c, color);
             if (!discard)
             {
-                zbuffer.set(P.x, P.y, TGAColor(frag_depth));
-                //std::cerr << (int)zbuffer.get(P.x, P.y).bgra[0] <<" ";
+                zbuffer[P.x+ P.y*width] = frag_depth;
                 image.set(P.x, P.y, color);
             }
         }

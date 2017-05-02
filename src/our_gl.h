@@ -5,6 +5,10 @@
 #include "geometry.h"
 #include "model.h"
 
+const int width  = 800;
+const int height = 800;
+const int depth = 255;
+
 extern Matrix ModelView;
 extern Matrix Viewport;
 extern Matrix Projection;
@@ -19,6 +23,6 @@ struct IShader {
     virtual bool fragment(Vec3f bar, TGAColor &color) = 0;
 };
 
-void triangle(Vec4f *pts, IShader &shader, TGAImage &image, TGAImage &zbuffer, Model *model);
+void triangle(Vec4f *pts, IShader &shader, TGAImage &image, float *zbuffer, Model *model);
 
 #endif // __OURGL_H__

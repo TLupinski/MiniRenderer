@@ -45,6 +45,7 @@ Model::Model(const char *filename) : verts_(), faces_(), norms_(), uv_() {
     load_texture(filename, "_diffuse.tga", diffusemap_);
     load_texture(filename, "_nm_tangent.tga", normalmap_);
     load_texture(filename, "_spec.tga", specularmap_);
+    load_texture(filename, "_glow.tga", glowmap_);
 }
 
 Model::~Model() {
@@ -84,6 +85,10 @@ void Model::load_texture(std::string filename, const char *suffix, TGAImage &img
 
 TGAColor Model::diffuse(Vec2f uv) {
     return diffusemap_.get((int)uv.x, (int)uv.y);
+}
+
+TGAColor Model::glow(Vec2f uv) {
+    return glowmap_.get((int)uv.x, (int)uv.y);
 }
 
 Vec2f Model::uv(int iface, int nvert) {

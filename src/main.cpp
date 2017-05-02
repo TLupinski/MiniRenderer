@@ -7,24 +7,30 @@
 #include "geometry.h"
 #include "our_gl.h"
 
-const int width  = 800;
-const int height = 800;
-const int depth = 255;
-
 Model *model = NULL;
-TGAImage *shadowbuffer, *zbuffer;
+float *shadowbuffer, *zbuffer;
 
-Vec3f light_dir(1,0,1);
+Vec3f light_dir(0,-5,1);
 Vec3f camera(0,0,5);
-Vec3f eye(1,1,3);
+Vec3f eye(0,0,3);
 Vec3f center(0,0,0);
 Vec3f up(0,1,0);
 
 struct GouraudShader : public IShader {
+    mat<4,4,float> uniform_M;   //  Projection*ModelView
+    mat<4,4,float> uniform_MIT; // (Projection*ModelView).invert_transpose()
+    mat<4,4,float> uniform_Mshadow; // transform framebuffer screen coordinates to shadowbuffer screen coordinates
     mat<2,3,float>varying_uv;     // written by vertex shader, read by fragment shader
     mat<4,3,float> varying_tri; // triangle coordinates (clip coordinates), written by VS, read by FS
     mat<3,3,float> varying_nrm; // normal per vertex to be interpolated by FS
     mat<3,3,float> ndc_tri;     // triangle in normalized device coordinates
+
+    GouraudShader(Matrix M, Matrix MIT, Matrix MS)
+    {
+        uniform_M = M;
+        uniform_MIT = MIT;
+        uniform_Mshadow =MS;
+    }
 
     virtual Vec4f vertex(int iface, int nthvert) {
 
@@ -40,6 +46,10 @@ struct GouraudShader : public IShader {
     virtual bool fragment(Vec3f bar, TGAColor &color) {
         Vec3f bn = (varying_nrm*bar).normalize();
         Vec2f uv = varying_uv*bar;
+        Vec4f sb_p = uniform_Mshadow*embed<4>(varying_tri*bar); // corresponding point in the shadow buffer
+        sb_p = sb_p/sb_p[3];
+        int idx = int(sb_p[0]) + int(sb_p[1])*width; // index in the shadowbuffer array
+        float shadow = shadow = .3+.7*(shadowbuffer[idx]<sb_p[2]+43.34); // magic coeff to avoid z-fighting
 
         mat<3,3,float> A;
         A[0] = ndc_tri.col(1) - ndc_tri.col(0);
@@ -56,13 +66,18 @@ struct GouraudShader : public IShader {
         B.set_col(2,bn);
 
         Vec3f n = (B*model->normal(uv)).normalize();
+        Vec3f l = proj<3>(Projection*ModelView*embed<4>(light_dir        )).normalize(); // light vector
+        Vec3f r = (n*(n*l*2.f) - l).normalize();   // reflected light
+        float spec = pow(std::max(r.z,0.f),model->specular(uv));//pow(std::max(r.z, 0.0f), model->specular(uv));
 
         float diff = std::max(0.f, n*light_dir);
-        color = model->diffuse(uv)*diff;
-        //or (int i=0; i<3; i++) color[i] = std::min<float>(5 + color[i]*(diff + .4*spec), 255);
+        TGAColor c = model->diffuse(uv);
+        TGAColor g = model->glow(uv);
+        for (int i=0; i<3; i++) color[i] = std::min<float>(20 + (c[i]+2*g[i])*shadow*(1.5*diff + 0.5*spec), 255);
         return false;                             // no, we do not discard this pixel
     }
 };
+
 struct ShadowShader : public IShader {
     mat<4,4,float> uniform_M;   //  Projection*ModelView
     mat<4,4,float> uniform_MIT; // (Projection*ModelView).invert_transpose()
@@ -88,18 +103,37 @@ struct ShadowShader : public IShader {
         Vec4f sb_p = uniform_Mshadow*embed<4>(varying_tri*bar); // corresponding point in the shadow buffer
         sb_p = sb_p/sb_p[3];
         int idx = int(sb_p[0]) + int(sb_p[1])*width; // index in the shadowbuffer array
-        float shadow = shadow = .3+.7*((int)shadowbuffer->get(sb_p[0],sb_p[1]).bgra[0]<sb_p[2]+43.34); // magic coeff to avoid z-fighting
+        float shadow = shadow = .3+.7*(shadowbuffer[idx]<sb_p[2]+43.34); // magic coeff to avoid z-fighting
         Vec2f uv = varying_uv*bar;                 // interpolate uv for the current pixel
         Vec3f n = proj<3>(uniform_MIT*embed<4>(model->normal(uv))).normalize(); // normal
         Vec3f l = proj<3>(uniform_M  *embed<4>(light_dir        )).normalize(); // light vector
         Vec3f r = (n*(n*l*2.f) - l).normalize();   // reflected light
-        float spec = pow(std::max(r.z, 0.0f), model->specular(uv));
+        float spec = /*model->specular(uv)/255.f;//*/pow(std::max(r.z, 0.0f), model->specular(uv));
         float diff = std::max(0.f, n*l);
         TGAColor c = model->diffuse(uv);
-        for (int i=0; i<3; i++) color[i] = std::min<float>(5 + c[i]*shadow*(1.2*diff + spec), 255);
+        TGAColor g = model->glow(uv);
+        for (int i=0; i<3; i++) color[i] = std::min<float>(20 + (c[i]+2*g[i])*shadow*(1.2*diff + 0.5*spec), 255);
         return false;
     }
 };
+
+struct ZShader : public IShader {
+    mat<4,3,float> varying_tri;
+
+    ZShader() : varying_tri() {}
+
+    virtual Vec4f vertex(int iface, int nthvert) {
+        Vec4f gl_Vertex = Projection*ModelView*embed<4>(model->vert(iface, nthvert));
+        varying_tri.set_col(nthvert, gl_Vertex);
+        return gl_Vertex;
+    }
+
+    virtual bool fragment(Vec3f bar, TGAColor &color) {
+        color = TGAColor(0, 0, 0);
+        return false;
+    }
+};
+
 struct DepthShader : public IShader {
     mat<3,3,float> varying_tri;
 
@@ -119,11 +153,25 @@ struct DepthShader : public IShader {
     }
 };
 
+float max_elevation_angle(float *zbuffer, Vec2f p, Vec2f dir) {
+    float maxangle = 0;
+    for (float t=0.; t<1000.; t+=1.) {
+        Vec2f cur = p + dir*t;
+        if (cur.x>=width || cur.y>=height || cur.x<0 || cur.y<0) return maxangle;
+
+        float distance = (p-cur).norm();
+        if (distance < 1.f) continue;
+        float elevation = zbuffer[int(cur.x)+int(cur.y)*width]-zbuffer[int(p.x)+int(p.y)*width];
+        maxangle = std::max(maxangle, atanf(elevation/distance));
+    }
+    return maxangle;
+}
+
 int main(int argc, char** argv) {
     if (2==argc) {
         model = new Model(argv[1]);
     } else {
-        model = new Model("obj/african_head.obj"); //*/"obj/diablo3_pose.obj");
+        model = new Model(/*"obj/african_head.obj"); //*/"obj/diablo3_pose.obj");
     }
 
     light_dir.normalize();
@@ -133,26 +181,21 @@ int main(int argc, char** argv) {
 
     TGAImage image(width, height, TGAImage::RGB);
     TGAImage depthshadow(width, height, TGAImage::RGB);
-    zbuffer = new TGAImage(width, height, TGAImage::GRAYSCALE);
-    shadowbuffer = new TGAImage(width, height, TGAImage::GRAYSCALE);
-
+    zbuffer = new float[width*height];
+    for (int i=width*height; i--;) zbuffer[i] = (-std::numeric_limits<float>::max());
+    shadowbuffer = new float[width*height];
+    //*
     DepthShader depthshader;
+    ZShader zshader;
     Vec4f screen_coords[3];
     for (int i=0; i<model->nfaces(); i++) {
         for (int j=0; j<3; j++) {
             screen_coords[j] = depthshader.vertex(i, j);
         }
-        triangle(screen_coords, depthshader, depthshadow, *shadowbuffer, model);
+        triangle(screen_coords, depthshader, depthshadow, shadowbuffer, model);
     }
-    shadowbuffer->flip_vertically();
-    shadowbuffer->write_tga_file("shadow.tga");
-    /*for (int i = 0; i < width; i++)
-    {
-        for (int j = 0; j < height; j++)
-        {
-            std::cerr << (int)shadowbuffer->get(i,j).bgra[0] << " ";
-        }
-    }*/
+    depthshadow.flip_vertically();
+    depthshadow.write_tga_file("shadow.tga");
 
     Matrix M = Viewport*Projection*ModelView;
     lookat(eye, center, up);
@@ -162,7 +205,8 @@ int main(int argc, char** argv) {
     Matrix MIT = (Projection*ModelView).invert_transpose();
     Matrix SM = M*(Viewport*Projection*ModelView).invert();
 
-    ShadowShader shader(ModelView, MIT, SM);
+    //ShadowShader shader(ModelView, MIT, SM);
+    GouraudShader shader(ModelView, MIT, SM);
     int i;
     for (i=0; i<model->nfaces(); i++) {
         std::vector<int> face = model->face(i);
@@ -171,7 +215,7 @@ int main(int argc, char** argv) {
         {
             pts[j] = shader.vertex(i, j);
         }
-        triangle(pts, shader, image, *zbuffer, model);
+        triangle(pts, shader, image, zbuffer, model);
     }
 
     image.flip_vertically();
