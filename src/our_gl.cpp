@@ -10,7 +10,7 @@ Matrix Projection;
 IShader::~IShader() {}
 
 void viewport(int x, int y, int w, int h, int depth) {
-    Viewport = Matrix::identity(4);
+    Viewport = Matrix::identity();
     Viewport[0][3] = x+w/2.f;
     Viewport[1][3] = y+h/2.f;
     Viewport[2][3] = depth/2.f;
@@ -22,7 +22,7 @@ void viewport(int x, int y, int w, int h, int depth) {
 
 void projection(float coef)
 {
-    Projection = Matrix::identity(4);
+    Projection = Matrix::identity();
     Projection[3][2] = coef;
 }
 
@@ -30,8 +30,8 @@ void lookat(Vec3f eye, Vec3f center, Vec3f up) {
     Vec3f z = (eye-center).normalize();
     Vec3f x = cross(up,z).normalize();
     Vec3f y = cross(z,x).normalize();
-    Matrix Minv = Matrix::identity(4);
-    Matrix Tr   = Matrix::identity(4);
+    Matrix Minv = Matrix::identity();
+    Matrix Tr   = Matrix::identity();
     for (int i=0; i<3; i++) {
         Minv[0][i] = x[i];
         Minv[1][i] = y[i];
