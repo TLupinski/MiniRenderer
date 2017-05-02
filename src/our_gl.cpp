@@ -78,6 +78,7 @@ void triangle(Vec4f *pts, IShader &shader, TGAImage &image, TGAImage &zbuffer, M
             if (!discard)
             {
                 zbuffer.set(P.x, P.y, TGAColor(frag_depth));
+                //std::cerr << (int)zbuffer.get(P.x, P.y).bgra[0] <<" ";
                 image.set(P.x, P.y, color);
             }
         }
