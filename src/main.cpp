@@ -10,9 +10,9 @@
 Model *model = NULL;
 float *shadowbuffer, *zbuffer;
 
-Vec3f light_dir(0,-5,1);
-Vec3f camera(0,0,5);
-Vec3f eye(0,0,3);
+Vec3f light_dir(0,0,1);
+Vec3f camera(0,0,1.5);
+Vec3f eye(0,1,3);
 Vec3f center(0,0,0);
 Vec3f up(0,1,0);
 
@@ -68,12 +68,12 @@ struct GouraudShader : public IShader {
         Vec3f n = (B*model->normal(uv)).normalize();
         Vec3f l = proj<3>(Projection*ModelView*embed<4>(light_dir        )).normalize(); // light vector
         Vec3f r = (n*(n*l*2.f) - l).normalize();   // reflected light
-        float spec = pow(std::max(r.z,0.f),model->specular(uv));//pow(std::max(r.z, 0.0f), model->specular(uv));
+        float spec = pow(r.z/*std::max(r.z,0.f)*/,model->specular(uv));//pow(std::max(r.z, 0.0f), model->specular(uv));
 
         float diff = std::max(0.f, n*light_dir);
         TGAColor c = model->diffuse(uv);
         TGAColor g = model->glow(uv);
-        for (int i=0; i<3; i++) color[i] = std::min<float>(20 + (c[i]+2*g[i])*shadow*(1.5*diff + 0.5*spec), 255);
+        for (int i=0; i<3; i++) color[i] = std::min<float>(20 + (c[i])*shadow*(std::max(0.0,1.5*diff + 0.5*spec)), 255);
         return false;                             // no, we do not discard this pixel
     }
 };
@@ -168,56 +168,61 @@ float max_elevation_angle(float *zbuffer, Vec2f p, Vec2f dir) {
 }
 
 int main(int argc, char** argv) {
-    if (2==argc) {
-        model = new Model(argv[1]);
-    } else {
-        model = new Model(/*"obj/african_head.obj"); //*/"obj/diablo3_pose.obj");
+    if (argc<2) {
+        argc++;
+        argv = new char*[2];
+        argv[1] = "obj/african_head.obj";
     }
 
     light_dir.normalize();
-    lookat(light_dir, center, up);
-    viewport(width/8, height/8, width*3/4, height*3/4, depth);
-    projection(0);
 
     TGAImage image(width, height, TGAImage::RGB);
     TGAImage depthshadow(width, height, TGAImage::RGB);
     zbuffer = new float[width*height];
     for (int i=width*height; i--;) zbuffer[i] = (-std::numeric_limits<float>::max());
     shadowbuffer = new float[width*height];
-    //*
-    DepthShader depthshader;
-    ZShader zshader;
-    Vec4f screen_coords[3];
-    for (int i=0; i<model->nfaces(); i++) {
-        for (int j=0; j<3; j++) {
-            screen_coords[j] = depthshader.vertex(i, j);
+    for (int n = 1; n < argc; n++)
+    {
+        model = new Model(argv[n]);
+
+        lookat(light_dir, center, up);
+        viewport(width/8, height/8, width*3/4, height*3/4, depth);
+        projection(0);
+        DepthShader depthshader;
+        ZShader zshader;
+        Vec4f screen_coords[3];
+        for (int i=0; i<model->nfaces(); i++) {
+            for (int j=0; j<3; j++) {
+                screen_coords[j] = depthshader.vertex(i, j);
+            }
+            triangle(screen_coords, depthshader, depthshadow, shadowbuffer, model);
         }
-        triangle(screen_coords, depthshader, depthshadow, shadowbuffer, model);
+
+        Matrix M = Viewport*Projection*ModelView;
+        lookat(eye, center, up);
+        viewport(width/8, height/8, width*3/4, height*3/4, depth);
+        projection(-1.f/(eye-center).norm());
+
+        Matrix MIT = (Projection*ModelView).invert_transpose();
+        Matrix SM = M*(Viewport*Projection*ModelView).invert();
+
+        //ShadowShader shader(ModelView, MIT, SM);
+        GouraudShader shader(ModelView, MIT, SM);
+        int i;
+        for (i=0; i<model->nfaces(); i++) {
+            std::vector<int> face = model->face(i);
+            Vec4f pts[3];
+            for (int j=0; j<3; j++)
+            {
+                pts[j] = shader.vertex(i, j);
+            }
+            triangle(pts, shader, image, zbuffer, model);
+        }
+
     }
+
     depthshadow.flip_vertically();
     depthshadow.write_tga_file("shadow.tga");
-
-    Matrix M = Viewport*Projection*ModelView;
-    lookat(eye, center, up);
-    viewport(width/8, height/8, width*3/4, height*3/4, depth);
-    projection(-1.f/(eye-center).norm());
-
-    Matrix MIT = (Projection*ModelView).invert_transpose();
-    Matrix SM = M*(Viewport*Projection*ModelView).invert();
-
-    //ShadowShader shader(ModelView, MIT, SM);
-    GouraudShader shader(ModelView, MIT, SM);
-    int i;
-    for (i=0; i<model->nfaces(); i++) {
-        std::vector<int> face = model->face(i);
-        Vec4f pts[3];
-        for (int j=0; j<3; j++)
-        {
-            pts[j] = shader.vertex(i, j);
-        }
-        triangle(pts, shader, image, zbuffer, model);
-    }
-
     image.flip_vertically();
     image.write_tga_file("output.tga");
     delete model;

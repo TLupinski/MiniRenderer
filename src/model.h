@@ -15,7 +15,7 @@ private:
     TGAImage normalmap_;
     TGAImage specularmap_;
     TGAImage glowmap_;
-    void load_texture(std::string filename, const char *suffix, TGAImage &img);
+    bool load_texture(std::string filename, const char *suffix, TGAImage &img);
 public:
     Model(const char *filename);
     ~Model();
